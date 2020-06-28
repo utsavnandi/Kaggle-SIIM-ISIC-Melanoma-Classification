@@ -238,7 +238,7 @@ def _mp_fn(rank, flags, data, fold_no, log):
     torch.set_default_tensor_type("torch.FloatTensor")
     train_model(data, fold_no, log)
 
-
+IMG_SIZE = 300
 FLAGS = {}
 FLAGS["batch_size"] = 64
 FLAGS["num_workers"] = 8
@@ -246,7 +246,7 @@ FLAGS["learning_rate"] = 4e-4
 FLAGS["num_epochs"] = 40
 FLAGS["weight_decay"] = 1e-4
 FLAGS["log_steps"] = 20
-FLAGS["img_size"] = 300
+FLAGS["img_size"] = IMG_SIZE
 FLAGS["loss"] = "focal"
 FLAGS["optimizer"] = "AdamW"
 FLAGS["scheduler"] = "ReduceLROnPlateau"
