@@ -1,12 +1,15 @@
+import torch
+import numpy as np
 from sklearn.metrics import roc_auc_score, roc_curve
+
 
 class RocAucMeter(object):
     def __init__(self):
         self.reset()
 
     def reset(self):
-        self.y_true = np.array([0,1])
-        self.y_pred = np.array([0.5,0.5])
+        self.y_true = np.array([0, 1])
+        self.y_pred = np.array([0.5, 0.5])
         self.score = 0
 
     def update(self, y_true, y_pred):
