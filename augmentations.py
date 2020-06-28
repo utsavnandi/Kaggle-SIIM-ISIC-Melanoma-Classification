@@ -1,9 +1,10 @@
 import numpy as np
+
 #import cv2
 import albumentations as A
-from albumentations.pytorch.transforms import ToTensorV2
 from albumentations.augmentations import functional as FA
 from albumentations.core.transforms_interface import DualTransform
+from albumentations.pytorch.transforms import ToTensorV2
 
 mean = (0.485, 0.456, 0.406)
 std = (0.229, 0.224, 0.225)
@@ -147,4 +148,3 @@ def get_valid_transforms(IMG_SIZE=300):
             ToTensorV2(p=1.0),
         ]
     )
-

@@ -1,39 +1,41 @@
-import os
-import gc
-import time
 import datetime
+import gc
+import os
 import random
+import time
 import warnings
 
-warnings.simplefilter("ignore")
-
-import numpy as np
 import cv2
+import numpy as np
 import pandas as pd
-
+import torch
+import torch.nn as nn
+import torch.nn.functional as F
+from torch.cuda.amp import GradScaler
+from torch.nn.parameter import Parameter
+from torch.utils.data import DataLoader, Dataset, WeightedRandomSampler
+from torch.utils.data.distributed import DistributedSampler
 # import matplotlib.pyplot as plt
 # import seaborn as sns
 from tqdm import tqdm
 
-# from sklearn.metrics import roc_curve
-
-import torch
-import torch.nn as nn
-import torch.nn.functional as F
-from torch.nn.parameter import Parameter
-from torch.utils.data import Dataset, DataLoader, WeightedRandomSampler
-from torch.cuda.amp import GradScaler
-
-from torch.utils.data.distributed import DistributedSampler
-
 # from ranger import Ranger
 import neptune
-
 from augmentations import get_train_transforms, get_valid_transforms
-from loss import sigmoid_focal_loss, bce_criterion
+from dataset import MelanomaDataset
+from loss import bce_criterion, sigmoid_focal_loss
 from metric import RocAucMeter
 from models import EfficientNet
-from dataset import MelanomaDataset
+
+warnings.simplefilter("ignore")
+
+
+
+# from sklearn.metrics import roc_curve
+
+
+
+
 
 device = torch.device("cuda") if torch.cuda.is_available() else torch.device("cpu")
 

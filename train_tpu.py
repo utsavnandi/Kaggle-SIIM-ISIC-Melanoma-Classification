@@ -1,47 +1,50 @@
-import os
-import gc
-import time
 import datetime
+import gc
+import os
 import random
+import time
 import warnings
 
-warnings.simplefilter("ignore")
-
-import numpy as np
 import cv2
+import numpy as np
 import pandas as pd
-
-# import matplotlib.pyplot as plt
-# import seaborn as sns
-from tqdm.notebook import tqdm
-
-# from sklearn.metrics import roc_curve
-
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
 from torch.nn.parameter import Parameter
-from torch.utils.data import Dataset, DataLoader, WeightedRandomSampler
-from torchvision import transforms, models
+from torch.utils.data import DataLoader, Dataset, WeightedRandomSampler
+from torch.utils.data.distributed import DistributedSampler
+from torch.utils.tensorboard import SummaryWriter
+from torchvision import models, transforms
+# import matplotlib.pyplot as plt
+# import seaborn as sns
+from tqdm.notebook import tqdm
 
 import torch_xla
 import torch_xla.core.xla_model as xm
-import torch_xla.utils.serialization as xser
 import torch_xla.debug.metrics as met
 import torch_xla.distributed.parallel_loader as pl
 import torch_xla.distributed.xla_multiprocessing as xmp
+import torch_xla.utils.serialization as xser
 import torch_xla.utils.utils as xu
-from torch.utils.data.distributed import DistributedSampler
-from torch.utils.tensorboard import SummaryWriter
-
-# from ranger import Ranger
-from catalyst.data.sampler import DistributedSamplerWrapper, BalanceClassSampler
-
 from augmentations import get_train_transforms, get_valid_transforms
-from loss import sigmoid_focal_loss, bce_criterion
+# from ranger import Ranger
+from catalyst.data.sampler import (BalanceClassSampler,
+                                   DistributedSamplerWrapper)
+from dataset import MelanomaDataset
+from loss import bce_criterion, sigmoid_focal_loss
 from metric import RocAucMeter
 from models import EfficientNet
-from dataset import MelanomaDataset
+
+warnings.simplefilter("ignore")
+
+
+
+# from sklearn.metrics import roc_curve
+
+
+
+
 
 
 def seed_everything(seed):
@@ -280,4 +283,3 @@ for fold_no in FLAGS["fold"]:
         nprocs=FLAGS["num_cores"],
         start_method="fork",
     )
-
