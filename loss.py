@@ -12,11 +12,14 @@ class CutMixCrossEntropyLoss(nn.Module):
 
     def forward(self, input, target):
         if len(target.size()) == 1:
-            target = torch.nn.functional.one_hot(target, num_classes=input.size(-1))
+            target = torch.nn.functional.one_hot(
+                target, num_classes=input.size(-1)
+            )
             target = target.float()
         return cross_entropy(input, target, self.size_average)
 
 
+# accepts smooth labels
 def cross_entropy(input, target, size_average=True):
     """ Cross entropy that accepts soft targets
     Args:
@@ -38,6 +41,7 @@ def cross_entropy(input, target, size_average=True):
         return torch.sum(torch.sum(-target * logsoftmax(input), dim=1))
 
 
+# correct focal loss
 def sigmoid_focal_loss(
     inputs: torch.Tensor,
     targets: torch.Tensor,
@@ -65,7 +69,9 @@ def sigmoid_focal_loss(
         Loss tensor with the reduction option applied.
     """
     p = torch.sigmoid(inputs)
-    ce_loss = F.binary_cross_entropy_with_logits(inputs, targets, reduction="none")
+    ce_loss = F.binary_cross_entropy_with_logits(
+        inputs, targets, reduction="none"
+    )
     p_t = p * targets + (1 - p) * (1 - targets)
     loss = ce_loss * ((1 - p_t) ** gamma)
 
@@ -87,3 +93,13 @@ def bce_criterion(y_pred, y_true):
 
 def cutmix_ce_criterion(y_pred, y_true):
     return CutMixCrossEntropyLoss()(y_pred, y_true)
+
+
+# batchwise
+def cutmix_mixup_criterion(
+    preds1, targets, alpha=-1, gamma=2.0,
+):
+    targets1, targets2, lam = targets[0], targets[1], targets[2]
+    loss = lam * sigmoid_focal_loss(preds1, targets1, alpha, gamma)
+    +(1 - lam) * sigmoid_focal_loss(preds1, targets2, alpha, gamma)
+    return loss

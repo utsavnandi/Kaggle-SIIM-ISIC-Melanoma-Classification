@@ -9,12 +9,12 @@ mkdir ~/.kaggle/
 cp /home/utsav_nandi/kaggle.json  ~/.kaggle/kaggle.json
 chmod 600 ~/.kaggle/kaggle.json
 kaggle datasets download -d shonenkov/melanoma-merged-external-data-512x512-jpeg
-unzip melanoma-merged-external-data-512x512-jpeg.zip -d /home/utsav_nandi/data/
+unzip melanoma-merged-external-data-512x512-jpeg.zip -d /home/utsav_nandi/data/ &> /dev/null
 rm /home/utsav_nandi/melanoma-merged-external-data-512x512-jpeg.zip
 kaggle competitions download siim-isic-melanoma-classification -f sample_submission.csv
 kaggle competitions download siim-isic-melanoma-classification -f test.csv
 kaggle competitions download siim-isic-melanoma-classification -f train.csv
-unzip /home/utsav_nandi/train.csv -d /home/utsav_nandi/data/
+unzip /home/utsav_nandi/train.csv -d /home/utsav_nandi/data/ &> /dev/null
 mv /home/utsav_nandi/test.csv /home/utsav_nandi/data/
 mv /home/utsav_nandi/sample_submission.csv /home/utsav_nandi/data/
 rm /home/utsav_nandi/train.csv.zip

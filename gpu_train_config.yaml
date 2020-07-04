@@ -1,0 +1,16 @@
+data_dir: ./data/
+FLAGS:
+  batch_size: 8
+  accumulation_steps: 4
+  num_workers: 4
+  learning_rate: 0.0004
+  num_epochs: 30
+  weight_decay: 0.001
+  log_interval: 25
+  img_size: 224
+  loss: focal
+  optimizer: AdamW
+  exp_name: efficientnet_b0
+  fold: [0]
+  alpha: 0.9153778942769768
+  gamma: 1.65

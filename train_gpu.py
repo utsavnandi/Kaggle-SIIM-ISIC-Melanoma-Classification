@@ -1,49 +1,32 @@
-import datetime
-import gc
-import os
+# import cv2
 import random
-import time
-import warnings
-
-import cv2
 import numpy as np
 import pandas as pd
 import torch
-import torch.nn as nn
-import torch.nn.functional as F
-from torch.cuda.amp import GradScaler
-from torch.nn.parameter import Parameter
-from torch.utils.data import DataLoader, Dataset, WeightedRandomSampler
-from torch.utils.data.distributed import DistributedSampler
-# import matplotlib.pyplot as plt
-# import seaborn as sns
 from tqdm import tqdm
+from torch.cuda.amp import GradScaler
+from torch.utils.data import DataLoader  # WeightedRandomSampler
+from sklearn.metrics import roc_auc_score
+from omegaconf import OmegaConf
 
 # from ranger import Ranger
-import neptune
+# import neptune
 from augmentations import get_train_transforms, get_valid_transforms
 from dataset import MelanomaDataset
-from loss import bce_criterion, sigmoid_focal_loss
-from metric import RocAucMeter
+from loss import sigmoid_focal_loss
+
+# from metric import RocAucMeter
 from models import EfficientNet
-
-warnings.simplefilter("ignore")
-
+from plots import plot_roc, draw_hist
 
 
-# from sklearn.metrics import roc_curve
-
-
-
-
-
-device = torch.device("cuda") if torch.cuda.is_available() else torch.device("cpu")
-
-DATA_DIR = "/content/data/"
-
-df_train = pd.read_csv(DATA_DIR + "folds_13062020.csv")
-df_test = pd.read_csv(DATA_DIR + "test.csv").rename(columns={"image_name": "image_id"})
-sample_submission = pd.read_csv(DATA_DIR + "sample_submission.csv")
+def seed_everything(seed):
+    random.seed(seed)
+    np.random.seed(seed)
+    torch.manual_seed(seed)
+    torch.cuda.manual_seed(seed)
+    torch.backends.cudnn.deterministic = True
+    torch.backends.cudnn.benchmark = False
 
 
 def get_datasets(data):
@@ -63,47 +46,35 @@ def train_one_epoch(
 ):
     model.train()
     running_loss = 0.0
-    for idx, (images, targets) in tqdm(enumerate(loader), total=len(loader)):  #
+    optimizer.zero_grad()
+    for idx, (images, targets) in tqdm(enumerate(loader), total=len(loader)):
         images = images.to(device)
-        targets = targets.to(device)  # .unsqueeze(1)
-
+        targets = targets.to(device)
         optimizer.zero_grad()
-
         y_pred = model(images.float())
-        loss = rank_loss(y_pred, targets)
-        # if np.random.rand()<0.33:
-        #    if np.random.rand()<0.5:
-        #        images, targets = cutmix(images, targets)
-        #    else:
-        #         images, targets = mixup(images, targets)
-        #    y_pred = model(images.float())
-        #    #if epoch<9:
-        #    loss = cutmix_mixup_criterion(y_pred, targets, None, 0.05)
-        #    #else:
-        #    #    loss = cutmix_mixup_criterion(y_pred, targets, 0.9, 0.)
-        # else:
-        #    y_pred = model(images.float())
-        #    #if epoch<9:
-        #    #loss = smooth_ohem_criterion(y_pred, targets, 1.0, 0.)
-        #    loss = smooth_criterion(y_pred, targets, 0.05)
-        #    #else:
-        #    #    loss = smooth_ohem_criterion(y_pred, targets, 0.9, 0.)
-
+        loss = (
+            sigmoid_focal_loss(y_pred, targets, FLAGS["alpha"], FLAGS["gamma"])
+            / FLAGS["accumulation_steps"]
+        )
         running_loss += float(loss)
 
         if scaler:
             scaler.scale(loss).backward()
-            scaler.step(optimizer)
-            scaler.update()
         else:
             loss.backward()
-            optimizer.step()
 
-        if scheduler is not None:
-            scheduler.step()
+        if (idx + 1) % FLAGS["accumulation_steps"] == 0:
+            if scaler:
+                scaler.step(optimizer)
+                scaler.update()
+            else:
+                optimizer.step()
+            optimizer.zero_grad()
+            if scheduler:
+                scheduler.step()
 
-        if log:
-            neptune.log_metric("Loss/train", float(loss))
+        # if log and (idx + 1) % FLAGS["log_interval"] == 0:
+        #    neptune.log_metric("Loss/train", float(loss))
 
     return running_loss / len(loader)
 
@@ -113,26 +84,41 @@ def val_one_epoch(loader, model):
     running_loss = 0.0
     y_preds_list = []
     targets_list = []
-    roc_auc_scores = RocAucMeter()
-    criterion = sigmoid_focal_loss
     with torch.no_grad():
-        for idx, (images, targets) in tqdm(enumerate(loader), total=len(loader)):
+        for idx, (images, targets) in tqdm(
+            enumerate(loader), total=len(loader)
+        ):
             images = images.to(device)
             targets = targets.to(device)  # .unsqueeze(1)
             y_pred = model(images.float())
-            loss = criterion(y_pred, targets)
+            loss = sigmoid_focal_loss(
+                y_pred, targets, FLAGS["alpha"], FLAGS["gamma"]
+            )
             running_loss += float(loss)
-            roc_auc_scores.update(targets, y_pred)
-    score = roc_auc_scores.avg
-    # roc_plot = plot_roc(y_true, y_pred)
-    print(f"roc_auc_score: {score}")
-    print(f"average loss for val epoch: {running_loss/len(loader)}")
-    return running_loss / len(loader), score  # , roc_plot
+            y_preds_list.append(torch.sigmoid(y_pred).cpu().numpy())
+            targets_list.append(targets.cpu().numpy())
+        y_true = np.vstack(targets_list)
+        y_pred = np.vstack(y_preds_list)
+        auc_score = roc_auc_score(
+            y_true, y_pred
+        )  # add [:, 1] for cross entropy
+        roc_plot = plot_roc(y_true, y_pred)  # add [:, 1] for cross entropy
+        hist, error_scaled = draw_hist(y_true, y_pred)
+        print(f"roc_auc_score: {auc_score:.5f}")
+        print(f"average loss for val epoch: {running_loss/len(loader):.5f}")
+        print(f"scaled error: {error_scaled:.5f}")
+    return running_loss / len(loader), auc_score, roc_plot, hist, error_scaled
 
 
-def save_upload(model, optimizer, best_score, epoch, fold=None, exp_name="model"):
+def save_upload(
+    model, optimizer, best_score, epoch, fold=None, exp_name="model"
+):
     if fold:
-        NAME = "siim-isic_" + exp_name + f"_fold_{str(fold+1)}_{str(epoch+1)}.ckpt"
+        NAME = (
+            "siim-isic_"
+            + exp_name
+            + f"_fold_{str(fold+1)}_{str(epoch+1)}.ckpt"
+        )
     NAME = "siim-isic_" + exp_name + f"_{str(epoch+1)}.ckpt"
     MODEL_PATH = NAME
     torch.save(
@@ -143,64 +129,74 @@ def save_upload(model, optimizer, best_score, epoch, fold=None, exp_name="model"
         },
         MODEL_PATH,
     )
-    print(f"Saved ckpt for epoch {epoch+1}, new best score: {best_score}")
-    upload_blob(MODEL_PATH, NAME)
-    print(f"Uploaded ckpt for epoch {epoch+1}")
+    print(f"Saved ckpt for epoch {epoch+1}, score: {best_score:.5f}")
 
 
 def fit(data, fold=None, log=True):
-    exp_name = FLAGS["exp_name"]
+
     best_score = 0.0
-
     model = EfficientNet("tf_efficientnet_b0_ns").to(device)
-
-    if log:
-        neptune.init("utsav/SIIM-ISIC", api_token=NEPTUNE_API_TOKEN)
-        neptune.create_experiment(
-            exp_name, exp_description, params=FLAGS, upload_source_files="*.txt"
-        )
-
-    # optimizer = torch.optim.SGD(
-    #    model.parameters(), lr=FLAGS['learning_rate'],
-    #    momentum=FLAGS['momentum'],
-    #    weight_decay=FLAGS['weight_decay']
+    # model.load_state_dict(
+    #     torch.load("/content/siim-isic_efficientnet_b0_2.ckpt")[
+    #         "model_state_dict"
+    #     ]
     # )
+    # if log:
+    #    neptune.init("utsav/SIIM-ISIC", api_token=NEPTUNE_API_TOKEN)
+    #    neptune.create_experiment(
+    #        FLAGS["exp_name"],
+    #        exp_description,
+    #        params=FLAGS,
+    #        upload_source_files="*.txt",
+    #    )
+
     optimizer = torch.optim.AdamW(
         model.parameters(),
         lr=FLAGS["learning_rate"],
         weight_decay=FLAGS["weight_decay"],
     )
 
-    # scheduler = ...
-    # todo ...
+    scheduler = torch.optim.lr_scheduler.ReduceLROnPlateau(
+        optimizer,
+        factor=0.5,
+        cooldown=0,
+        mode="min",
+        patience=3,
+        verbose=True,
+        min_lr=1e-8,
+    )
 
     datasets = get_datasets(data)
 
     # sampler
-    # labels_vcount = pd.Series(y_train).value_counts()
-    labels_vcount = y_train["target"].value_counts()
-    class_counts = [
-        labels_vcount[0].astype(np.float32),
-        labels_vcount[1].astype(np.float32),
-    ]
-    num_samples = sum(class_counts)
-    class_weights = [num_samples / class_counts[i] for i in range(len(class_counts))]
-    weights = [
-        class_weights[y_train["target"].values[i]] for i in range(int(num_samples))
-    ]
-    sampler = WeightedRandomSampler(torch.DoubleTensor(weights), int(num_samples))
+    # labels_vcount = y_train["target"].value_counts()
+    # class_counts = [
+    #     labels_vcount[0].astype(np.float32),
+    #     labels_vcount[1].astype(np.float32),
+    # ]
+    # num_samples = sum(class_counts)
+    # class_weights = [
+    #     num_samples / class_counts[i] for i in range(len(class_counts))
+    # ]
+    # weights = [
+    #     class_weights[y_train["target"].values[i]]
+    #     for i in range(int(num_samples))
+    # ]
+    # sampler = WeightedRandomSampler(
+    #     torch.DoubleTensor(weights), int(num_samples)
+    # )
 
     # loaders
     train_loader = DataLoader(
         datasets["train"],
         batch_size=FLAGS["batch_size"],
         num_workers=FLAGS["num_workers"],
-        sampler=sampler,
+        shuffle=True,  # sampler=sampler,
         pin_memory=True,
     )
     val_loader = DataLoader(
         datasets["valid"],
-        batch_size=32,
+        batch_size=FLAGS["batch_size"] * 2,
         shuffle=False,
         num_workers=FLAGS["num_workers"],
         drop_last=True,
@@ -222,52 +218,58 @@ def fit(data, fold=None, log=True):
             log=log,
         )
 
-        print()
-        print(f"Average loss for epoch #{epoch+1} : {train_loss}")
-        val_loss, auc_score = val_one_epoch(val_loader, model)
+        print(f"\nAverage loss for epoch #{epoch+1} : {train_loss:.5f}")
+        val_output = val_one_epoch(val_loader, model)
+        val_loss, auc_score, roc_plot, hist, error_scaled = val_output
+        scheduler.step(error_scaled)
 
         # logs
-        if log:
-            neptune.log_metric("AUC/val", auc_score)
-            # neptune.log_image("ROC/val", roc_plot)
-            neptune.log_metric("Loss/val", val_loss)
+        # if log:
+        #     neptune.log_metric("AUC/val", auc_score)
+        #     neptune.log_image("ROC/val", roc_plot)
+        #     neptune.log_metric("Loss/val", val_loss)
+        #     neptune.log_image("hist/val", hist)
 
         # checkpoint+upload
-        if (auc_score > best_score) or (best_score - auc_score < 0.02):
+        if (auc_score > best_score) or (best_score - auc_score < 0.025):
             if auc_score > best_score:
                 best_score = auc_score
-            save_upload(model, optimizer, best_score, epoch, fold, exp_name=exp_name)
+            save_upload(
+                model,
+                optimizer,
+                best_score,
+                epoch,
+                fold,
+                exp_name=FLAGS["exp_name"],
+            )
 
         print("-" * 28 + f"Epoch #{epoch+1} ended" + "-" * 28)
-    if log:
-        neptune.stop()
+
+    # if log:
+    #    neptune.stop()
+
     return model
 
 
-IMG_SIZE = 300
-FLAGS = {}
-FLAGS["batch_size"] = 32
-FLAGS["num_workers"] = 4
-FLAGS["learning_rate"] = 3e-4
-FLAGS["num_epochs"] = 20
-FLAGS["weight_decay"] = 5e-4
-FLAGS["momentum"] = 0.9
-FLAGS["img_size"] = IMG_SIZE
-FLAGS["loss"] = "BCE unbalanced hard label ohem"
-FLAGS["optimizer"] = "AdamW"
-FLAGS["exp_name"] = "enet_b0"
-FLAGS["fold"] = [0]  # , 1, 2, 3, 4]
-exp_description = """
-enet_b0 with base head,
-Extra Data + Color fix
-hard label ohem
-cutmix + mixup
-RandomWeightedSampler,
-imsize 300
-"""
-log = False
+if __name__ == "__main__":
+    device = (
+        torch.device("cuda")
+        if torch.cuda.is_available()
+        else torch.device("cpu")
+    )
+    seed_everything(43)
+    cfg = OmegaConf.load("./gpu_train_config.yaml")
+    print(cfg.pretty())
+    FLAGS = cfg.FLAGS
+    IMG_SIZE = FLAGS.img_size
+    log = False
+    DATA_DIR = cfg.data_dir
+    df_train = pd.read_csv(DATA_DIR + "folds_13062020.csv")
+    df_test = pd.read_csv(DATA_DIR + "test.csv").rename(
+        columns={"image_name": "image_id"}
+    )
+    sample_submission = pd.read_csv(DATA_DIR + "sample_submission.csv")
 
-try:
     for fold_no in FLAGS["fold"]:
         X_train = df_train[df_train["fold"] != fold_no][
             [col for col in df_train.columns if col != "target"]
@@ -283,10 +285,3 @@ try:
         ]
         data = X_train, y_train, X_val, y_val
         trained_model = fit(data, log=log)
-except Exception as e:
-    if log:
-        neptune.stop()
-    print(e)
-except KeyboardInterrupt:
-    if log:
-        neptune.stop()
