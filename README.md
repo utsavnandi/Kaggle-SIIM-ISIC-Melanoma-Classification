@@ -17,7 +17,7 @@ Regarding the libraries, all rights belong to their respective owners.
 
 Best Private Score achieved: 
 
-2x EfficientNet B0: 0.9210 AUC with 512x512 imagesize
+2x EfficientNet B0: 0.9200 AUC with 512x512 imagesize
 No Metadata, TTA and Pseudolabelling was used,
 ~Top 58% Rank
 
